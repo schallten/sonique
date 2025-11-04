@@ -1,27 +1,37 @@
-import os
-from dotenv import load_dotenv
-import mysql.connector
-from mysql.connector import Error
+import sqlite3
 from engine.spotify_parser import spotify_parser
 
-load_dotenv()
-
-MYSQL_HOST = os.getenv("MYSQL_HOST")
-MYSQL_USER = os.getenv("MYSQL_USER")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD")
-MYSQL_DB = os.getenv("MYSQL_DB")
+DB_PATH = "sonique.db"
 
 
-def get_connection():
+def create_db(conn: sqlite3.Connection):
+    """create db if it does not exist"""
     try:
-        conn = mysql.connector.connect(
-            host=MYSQL_HOST,
-            user=MYSQL_USER,
-            password=MYSQL_PASSWORD,
-            database=MYSQL_DB,
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS Songs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                spotify_ID VARCHAR(25) NOT NULL,
+                youtube_ID VARCHAR(15) NOT NULL,
+                hash_time FLOAT NOT NULL,
+                hash_value VARCHAR(50) NOT NULL
+            )
+        """
         )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hash_value ON Songs (hash_value)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_hash_time ON Songs (hash_time)")
+        conn.commit()
+    except sqlite3.Error as e:
+        print(f"[DB ERROR] create_db failed: {e}")
+
+
+def get_connection() -> sqlite3.Connection | None:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        create_db(conn)
         return conn
-    except Error as e:
+    except sqlite3.Error as e:
         print(f"[DB ERROR] Connection failed: {e}")
         return None
 
@@ -30,7 +40,7 @@ def song_exists(track_id: str) -> int:
     """checks if spotifyID already in DB\n
     **PARAMS:** track_id\n
     **RETURN:** boolean"""
-    query = "SELECT EXISTS(SELECT 1 FROM Songs WHERE spotify_ID = %s) AS spotify_exists"
+    query = "SELECT EXISTS(SELECT 1 FROM Songs WHERE spotify_ID = ?) AS spotify_exists"
 
     conn = get_connection()
     if not conn:
@@ -38,11 +48,12 @@ def song_exists(track_id: str) -> int:
         return 0
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
         cursor.execute(query, (track_id,))
         result = cursor.fetchone()
         return result["spotify_exists"] if result else 0
-    except Error as e:
+    except sqlite3.Error as e:
         print(f"[DB ERROR] song_exists failed: {e}")
         return 0
     finally:
@@ -59,7 +70,7 @@ def save_fingerprints_batch(fingerprints: list[dict]):
 
     query = """
         INSERT INTO Songs (spotify_ID, youtube_ID, hash_time, hash_value)
-        VALUES (%s, %s, %s, %s)
+        VALUES (?, ?, ?, ?)
     """
     data = [
         (fp["spotify_ID"], fp["youtube_ID"], fp["hash_time"], fp["hash_value"])
@@ -77,7 +88,7 @@ def save_fingerprints_batch(fingerprints: list[dict]):
         conn.commit()
         print(f"[DB] Inserted {len(data)} fingerprints.")
         return len(data)
-    except Error as e:
+    except sqlite3.Error as e:
         print(f"[DB ERROR] Failed to insert fingerprints: {e}")
         conn.rollback()
         return 0
@@ -100,11 +111,12 @@ def get_dashboard() -> list[dict]:
         return []
 
     try:
-        cursor = conn.cursor(dictionary=True)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
         cursor.execute(query)
-        results = cursor.fetchall()
-        return results  # list of dicts
-    except mysql.connector.Error as e:
+        results = [dict(row) for row in cursor.fetchall()]
+        return results
+    except sqlite3.Error as e:
         print(f"[DB ERROR] Failed to fetch dashboard data: {e}")
         return []
     finally:
@@ -121,7 +133,7 @@ def get_song(spotify_id: str) -> tuple[str, str, str, str, str] | None:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT spotify_ID, youtube_ID FROM Songs WHERE spotify_ID = %s LIMIT 1",
+            "SELECT spotify_ID, youtube_ID FROM Songs WHERE spotify_ID = ? LIMIT 1",
             (spotify_id,),
         )
         row = cursor.fetchone()
@@ -145,7 +157,7 @@ def get_song(spotify_id: str) -> tuple[str, str, str, str, str] | None:
             metadata.get("duration_ms", ""),
         )
 
-    except Error as e:
+    except sqlite3.Error as e:
         print(f"[DB ERROR] get_song failed: {e}")
         return None
     finally:
@@ -153,3 +165,24 @@ def get_song(spotify_id: str) -> tuple[str, str, str, str, str] | None:
             cursor.close()
         if conn:
             conn.close()
+
+def get_all_fingerprints() -> list[dict]:
+    """returns list of all fingerprints in DB"""
+    query = "SELECT spotify_ID, hash_value, hash_time FROM Songs"
+
+    conn = get_connection()
+    if not conn:
+        return []
+
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(query)
+        results = [dict(row) for row in cursor.fetchall()]
+        return results
+    except sqlite3.Error as e:
+        print(f"[DB ERROR] Failed to fetch fingerprints: {e}")
+        return []
+    finally:
+        cursor.close()
+        conn.close()

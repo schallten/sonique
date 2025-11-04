@@ -45,4 +45,4 @@ def create_hash(freq1, freq2, time_delta):
     # Creates 2^28 unique possible combinations
     hash_int = (freq1 << 18) | (freq2 << 8) | time_delta
     
-    return hash_int
+    return hex(hash_int)
