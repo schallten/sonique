@@ -9,22 +9,22 @@ Sonique will identify songs by listening to short audio samples and matching the
 
 ## Status
 
-- backend routes completed
+- backend routes completed (including /feedback)
 - frontend completed
 - complete pipeline ready for processing and indexing new songs
+- song metadata cached in DB (no more Spotify API calls on every lookup)
+- rate limiting on feedback endpoint
 
 ## Stack
 
 - **Backend:** FastAPI (python)
 - **Frontend:** React Native (Expo)
-- **Database:** MySQL (potential migration to PostgreSQL during production)
+- **Database:** SQLite
 
 ## TODO
 
-- fingerprinting algorithm: merge
-- matching pipeline: merger
-- backend feedback route (/feedback)
-- frontend cleanups ('/match' response logic not handled; '/feedback' route not handled; update TouchableWithoutFeedback (depricated) to Pressable)
+- frontend: handle /match response to show detected song (Detected component)
+- frontend: add feedback UI (confirm/deny match)
 
 ## Contributors
 

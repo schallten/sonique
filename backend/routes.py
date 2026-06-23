@@ -5,19 +5,16 @@ ROUTE               TYPE    ACTION
 /dashboard          GET     queries the entire DB for the dashboard
 /dashboard          POST    queries the DB for specific entries and returns spotify metadata
 /match              POST    takes user's mp3, runs pipeline to create hash, queries DB for matches, returns matches with %
-TODO
 /feedback           POST    after match, asks user if match was correct
-NOTE: for /feedback, if user's match was correct, save that as a hit to DB and delete the sampled audio, else save the sampled audio along with time of match. additionally, add a rate limiter per user so that users cannot false flag and fill our backend files with garbage
 """
 
 import time
 from pydantic import BaseModel
-from fastapi import APIRouter, HTTPException, UploadFile, File
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from engine.spotify_parser import extract_spotify_ids
 from pipeline.load import process_spotify_track
-from pipeline.db import get_dashboard, get_song
+from pipeline.db import get_dashboard, get_song, save_feedback, check_rate_limit
 from pipeline.match import process_audio_sample
 
 router = APIRouter()
@@ -32,6 +29,11 @@ class LoadRequest(BaseModel):
 
 class DashboardRequest(BaseModel):
     spotify_id: str
+
+
+class FeedbackRequest(BaseModel):
+    spotify_id: str
+    is_correct: bool
 
 
 @router.post("/load")
@@ -53,6 +55,9 @@ async def load_tracks(req: LoadRequest, max_workers: int = 5):
         except Exception as e:
             print(f"[ERROR] Playlist {playlist_id} failed: {e}")
 
+    # remove duplicates before processing
+    all_track_ids = list(dict.fromkeys(all_track_ids))
+
     if not all_track_ids:
         raise HTTPException(status_code=400, detail="No track IDs available to process")
 
@@ -68,8 +73,8 @@ async def load_tracks(req: LoadRequest, max_workers: int = 5):
         for future in as_completed(futures):
             tid = futures[future]
             try:
-                result = future.result()
-                if result == 1:
+                success = future.result()
+                if success:
                     processed_count += 1
             except Exception as e:
                 print(f"[ERROR] Track {tid} failed: {e}")
@@ -102,25 +107,16 @@ async def dashboard_post(req: DashboardRequest):
     song = get_song(req.spotify_id)
     if not song:
         raise HTTPException(status_code=404, detail="Song not found")
-    (
-        spotify_id,
-        youtube_id,
-        title,
-        artists,
-        cover,
-        album_name,
-        release_date,
-        duration_ms,
-    ) = song
+
     return {
-        "spotify_ID": spotify_id,
-        "youtube_ID": youtube_id,
-        "title": title,
-        "artists": artists,
-        "cover": cover,
-        "album_name": album_name,
-        "release_date": release_date,
-        "duration_ms": duration_ms,
+        "spotify_ID": song.get("spotify_ID", ""),
+        "youtube_ID": song.get("youtube_ID", ""),
+        "title": song.get("title", ""),
+        "artists": song.get("artists", ""),
+        "cover": song.get("cover", ""),
+        "album_name": song.get("album_name", ""),
+        "release_date": song.get("release_date", ""),
+        "duration_ms": song.get("duration_ms", 0),
     }
 
 
@@ -134,11 +130,28 @@ async def match(file: UploadFile = File(...)):
         raise HTTPException(
             status_code=413, detail="File too large. Max size is 10 MB."
         )
-    # VERY IMPORTANT: process_audio_sample should accept bytes or a path like object
+
     result = process_audio_sample(audio_bytes)
+
+    if not result:
+        return {"status": "no_match", "result": []}
+
     return {"status": "success", "result": result}
 
 
 @router.post("/feedback")
-async def match():
-    return JSONResponse(content={"200: Ok"})
+async def feedback(req: FeedbackRequest, request: Request):
+    # get user IP for rate limiting
+    user_ip = request.client.host if request.client else "unknown"
+
+    # rate limit: max 10 feedback requests per minute
+    if not check_rate_limit(user_ip, "feedback", max_requests=10, window_seconds=60):
+        raise HTTPException(
+            status_code=429, detail="Too many feedback requests. Please wait a moment."
+        )
+
+    if not req.spotify_id:
+        raise HTTPException(status_code=400, detail="No Spotify ID provided")
+
+    save_feedback(req.spotify_id, user_ip, req.is_correct)
+    return {"status": "ok", "message": "Feedback saved"}

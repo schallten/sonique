@@ -4,7 +4,7 @@ import Overlay from "./Overlay";
 import { styles } from "../styles/components.styles";
 
 export default function Detected({ data }) {
-  const confidencePercent = Math.round(data.confidence * 100);
+  const confidencePercent = Math.round(data.confidence);
 
   const openSpotify = () => {
     Linking.openURL(`https://open.spotify.com/track/${data.spotify_ID}`);

@@ -1,15 +1,22 @@
-import os, base64, requests
+import os, base64, time, requests
 from dotenv import load_dotenv
 
 load_dotenv()
 CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
 CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
 
+# simple token cache so we dont request a new one every call
+_cached_token = None
+_token_expiry = 0
 
-def spotify_parser(track_id: str):
-    """returns metadata for a spotify song\n
-    **PARAMS:** track_id (spotify songID)\n
-    **RETURN:** {title, artists, album_name, cover (link), release_date, duration_ms}"""
+
+def _get_token():
+    """get a spotify access token, reuses cached one if still valid"""
+    global _cached_token, _token_expiry
+
+    if _cached_token and time.time() < _token_expiry:
+        return _cached_token
+
     token_resp = requests.post(
         "https://accounts.spotify.com/api/token",
         headers={
@@ -25,6 +32,19 @@ def spotify_parser(track_id: str):
     token = token_resp.json().get("access_token")
     if not token:
         raise Exception("Spotify access token missing")
+
+    # spotify tokens last 3600 seconds, refresh a bit early to be safe
+    _cached_token = token
+    _token_expiry = time.time() + 3500
+
+    return token
+
+
+def spotify_parser(track_id: str):
+    """returns metadata for a spotify song\n
+    **PARAMS:** track_id (spotify songID)\n
+    **RETURN:** {title, artists, album_name, cover (link), release_date, duration_ms}"""
+    token = _get_token()
 
     resp = requests.get(
         f"https://api.spotify.com/v1/tracks/{track_id}",
@@ -51,25 +71,12 @@ def spotify_parser(track_id: str):
     }
 
 
-## why this ???
-
 def extract_spotify_ids(item_id: str, item_type: str):
     """extracts all track IDs from a Spotify album/playlist\n
     **PARAMS:** item_id (spotify album/playlist ID), item_type ("album" / "playlist")\n
     **RETURN:**list of track IDs
     """
-    # Get access token
-    token_resp = requests.post(
-        "https://accounts.spotify.com/api/token",
-        headers={
-            "Authorization": f"Basic {base64.b64encode(f'{CLIENT_ID}:{CLIENT_SECRET}'.encode()).decode()}"
-        },
-        data={"grant_type": "client_credentials"},
-        timeout=10,
-    )
-    if token_resp.status_code != 200:
-        raise Exception("Failed to get Spotify access token")
-    token = token_resp.json().get("access_token")
+    token = _get_token()
     headers = {"Authorization": f"Bearer {token}"}
 
     track_ids = []
@@ -86,7 +93,6 @@ def extract_spotify_ids(item_id: str, item_type: str):
         track_ids = [t["id"] for t in tracks]
 
     elif item_type == "playlist":
-        # Spotify paginates playlist tracks, so loop through pages
         url = f"https://api.spotify.com/v1/playlists/{item_id}/tracks"
         while url:
             resp = requests.get(url, headers=headers, timeout=10)
@@ -100,7 +106,7 @@ def extract_spotify_ids(item_id: str, item_type: str):
                     if item.get("track")
                 ]
             )
-            url = data.get("next")  # next page URL
+            url = data.get("next")
 
     else:
         raise ValueError('item_type must be either "album" or "playlist"')

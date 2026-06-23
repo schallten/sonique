@@ -1,5 +1,5 @@
 import os
-from pipeline.db import save_fingerprints_batch, song_exists
+from pipeline.db import save_fingerprints_batch, save_song_metadata, song_exists
 from engine.spotify_parser import spotify_parser
 from engine.yt_scraper import yt_downloader
 from engine.preprocessor import preprocessor
@@ -7,31 +7,32 @@ from engine.spectrogram import audio_to_spectrogram
 from engine.peak_maker import extract_peaks
 from engine.fingerprinting import generate_hashes
 
+
 def process_spotify_track(track_id: str):
     """runs complete pipeline for a spotify ID
     **PIPELINE:** check if exists > Spotify metadata > YT search & download > preprocessing > spectrogram > fingerprinting > save to DB > cleanup > return
     **PARAMS:** track_id (spotify)
-    **RETURN:** list of dicts [{spotify_ID, youtube_ID, hash, time}]"""
+    **RETURN:** True if processed successfully, False otherwise"""
     print(f"\n[START] Processing Spotify ID: {track_id}")
 
     try:
         # 1: check if song already exists
         if song_exists(track_id):
             print(f"[WARN] Skipping track {track_id}: Song already exists")
-            return [], True
+            return False
 
         # 2: Spotify metadata
         try:
             info = spotify_parser(track_id)
         except ValueError as e:
             print(f"[WARN] Skipping track {track_id}: {e}")
-            return [], True
+            return False
 
         title = info.get("title")
         artists = info.get("artists")
         if not title or not artists:
             print(f"[WARN] Invalid metadata for {track_id}, skipping...")
-            return [], True
+            return False
 
         print(f"[INFO] Track: {title} - {artists}")
 
@@ -43,7 +44,7 @@ def process_spotify_track(track_id: str):
             audio_path, youtube_id = yt_downloader(query, safe_filename)
         except ValueError as e:
             print(f"[WARN] Skipping track {track_id}: {e}")
-            return [], True
+            return False
 
         print(f"[INFO] Downloaded audio: {audio_path}")
         print(f"[INFO] YouTube ID: {youtube_id}")
@@ -72,19 +73,24 @@ def process_spotify_track(track_id: str):
         ]
         print(f"[INFO] Generated {len(fingerprints)} fingerprints")
 
-        # 7: save to DB
+        # 7: save fingerprints to DB
         save_fingerprints_batch(fingerprints)
 
-        # 8: cleanup
+        # 8: save metadata to DB (so we dont need to call spotify API every time)
+        save_song_metadata(track_id, youtube_id, info)
+
+        # 9: cleanup temp files
         for path in [audio_path, processed_path]:
             if os.path.exists(path):
                 os.remove(path)
 
         print(f"[DONE] Finished processing {track_id}\n")
+        return True
 
     except Exception as e:
         print(f"[ERROR] Failed to process {track_id}: {e}")
-        return [], True
+        return False
+
 
 if __name__ == "__main__":
     ids = [
