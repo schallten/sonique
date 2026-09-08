@@ -3,6 +3,8 @@ import { Animated, Pressable, View, Text, Alert } from "react-native";
 import { FontAwesome } from "@expo/vector-icons";
 import { styles } from "../styles/components.styles";
 import Overlay from "./Overlay";
+import Detected from "./Detected";
+import { useProcess } from "../context/ProcessContext";
 import * as DocumentPicker from "expo-document-picker";
 import {
   useAudioRecorder,
@@ -14,9 +16,11 @@ import {
 } from "expo-audio";
 
 export default function Recorder() {
+  const { addMatch } = useProcess();
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [fileUri, setFileUri] = useState(null);
   const [playing, setPlaying] = useState(false);
+  const [detectedData, setDetectedData] = useState(null);
 
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const uploadAnim = useRef(new Animated.Value(1)).current;
@@ -165,7 +169,20 @@ export default function Recorder() {
       if (response.ok) {
         const result = await response.json();
         console.log("Detection successful:", result);
-        Alert.alert("Success", "Song detected!");
+        setOverlayVisible(false);
+        setPlaying(false);
+        setFileUri(null);
+        if (result.status === "success" && result.result?.length > 0) {
+          const best = result.result[0];
+          const matchData = {
+            ...best.song_details,
+            confidence: best.confidence,
+          };
+          setDetectedData(matchData);
+          addMatch(matchData);
+        } else {
+          Alert.alert("No Match", "No matching song found in the database.");
+        }
       } else {
         const errorData = await response.json();
         console.error("Detection failed:", response.status, errorData);
@@ -257,6 +274,13 @@ export default function Recorder() {
             </View>
           </View>
         </Overlay>
+      )}
+
+      {detectedData && (
+        <Detected
+          data={detectedData}
+          onClose={() => setDetectedData(null)}
+        />
       )}
     </View>
   );

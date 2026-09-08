@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { View, Text, TouchableOpacity, ScrollView } from "react-native";
 import { styles } from "../styles/components.styles";
 import ListItemCollapsed from "./ListItemCollapsed";
@@ -7,8 +7,6 @@ import { MaterialIcons } from "@expo/vector-icons";
 export default function List() {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  const handleFilter = () => console.log("Filter clicked");
 
   const handleRefresh = async () => {
     setLoading(true);
@@ -23,6 +21,10 @@ export default function List() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    handleRefresh();
+  }, []);
 
   const skeletonCount = 5;
 

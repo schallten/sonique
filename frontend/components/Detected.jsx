@@ -3,7 +3,7 @@ import { FontAwesome } from "@expo/vector-icons";
 import Overlay from "./Overlay";
 import { styles } from "../styles/components.styles";
 
-export default function Detected({ data }) {
+export default function Detected({ data, onClose }) {
   const confidencePercent = Math.round(data.confidence);
 
   const openSpotify = () => {
@@ -15,7 +15,7 @@ export default function Detected({ data }) {
   };
 
   return (
-    <Overlay visible={true} onClose={() => {}}>
+    <Overlay visible={true} onClose={onClose}>
       <View style={styles.detectedContainer}>
         <Text style={styles.detectedConfidence}>
           Confidence: {confidencePercent}%
@@ -44,6 +44,13 @@ export default function Detected({ data }) {
             <Text style={styles.detectedButtonText}>YouTube</Text>
           </TouchableOpacity>
         </View>
+
+        <TouchableOpacity
+          style={{ marginTop: 16, paddingVertical: 10, paddingHorizontal: 24, backgroundColor: "#333", borderRadius: 12 }}
+          onPress={onClose}
+        >
+          <Text style={{ color: "#fff", fontWeight: "700", textAlign: "center" }}>Close</Text>
+        </TouchableOpacity>
       </View>
     </Overlay>
   );

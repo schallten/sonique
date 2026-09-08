@@ -9,11 +9,14 @@ ROUTE               TYPE    ACTION
 """
 
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any
+
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, UploadFile, File, Request
-from concurrent.futures import ThreadPoolExecutor, as_completed
+
 from engine.spotify_parser import extract_spotify_ids
-from pipeline.load import process_spotify_track
+from pipeline.load import process_spotify_track, process_youtube_track, extract_yt_playlist_ids
 from pipeline.db import get_dashboard, get_song, save_feedback, check_rate_limit
 from pipeline.match import process_audio_sample
 
@@ -21,33 +24,46 @@ router = APIRouter()
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB upload size for /match
 
 
-class LoadRequest(BaseModel):
+class LoadRequest(BaseModel):  # type: ignore[misc]
     track_id: list[str] = []
     album_id: list[str] = []
     playlist_id: list[str] = []
+    youtube_url: str = ""
 
 
-class DashboardRequest(BaseModel):
+class DashboardRequest(BaseModel):  # type: ignore[misc]
     spotify_id: str
 
 
-class FeedbackRequest(BaseModel):
+class FeedbackRequest(BaseModel):  # type: ignore[misc]
     spotify_id: str
     is_correct: bool
 
 
-@router.post("/load")
-async def load_tracks(req: LoadRequest, max_workers: int = 5):
-    all_track_ids = []
+@router.post("/load")  # type: ignore[untyped-decorator]
+async def load_tracks(req: LoadRequest, max_workers: int = 5) -> dict[str, Any]:
+    all_track_ids: list[str] = []
+    youtube_ids: list[str] = []
 
-    # collect all track IDs before batch processing (tracks, albums, playlists)
+    # YouTube playlist URL
+    if req.youtube_url:
+        try:
+            youtube_ids.extend(extract_yt_playlist_ids(req.youtube_url))
+        except Exception as e:
+            print(f"[ERROR] YouTube playlist failed: {e}")
+
+    # Spotify track IDs
     all_track_ids.extend(req.track_id or [])
+
+    # Spotify album IDs
     for album_id in req.album_id or []:
         try:
             album_tracks = extract_spotify_ids(album_id, "album")
             all_track_ids.extend(album_tracks)
         except Exception as e:
             print(f"[ERROR] Album {album_id} failed: {e}")
+
+    # Spotify playlist IDs
     for playlist_id in req.playlist_id or []:
         try:
             playlist_tracks = extract_spotify_ids(playlist_id, "playlist")
@@ -55,33 +71,40 @@ async def load_tracks(req: LoadRequest, max_workers: int = 5):
         except Exception as e:
             print(f"[ERROR] Playlist {playlist_id} failed: {e}")
 
-    # remove duplicates before processing
+    # remove duplicates
     all_track_ids = list(dict.fromkeys(all_track_ids))
+    youtube_ids = list(dict.fromkeys(youtube_ids))
 
-    if not all_track_ids:
-        raise HTTPException(status_code=400, detail="No track IDs available to process")
+    total = len(all_track_ids) + len(youtube_ids)
+    if total == 0:
+        raise HTTPException(status_code=400, detail="No track IDs or YouTube URLs to process")
 
     start_time = time.time()
     processed_count = 0
-    total_tracks = len(all_track_ids)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(process_spotify_track, tid): tid for tid in all_track_ids
-        }
+        futures = {}
+
+        # submit Spotify tracks
+        for tid in all_track_ids:
+            futures[executor.submit(process_spotify_track, tid)] = ("spotify", tid)
+
+        # submit YouTube tracks
+        for ytid in youtube_ids:
+            futures[executor.submit(process_youtube_track, ytid)] = ("youtube", ytid)
 
         for future in as_completed(futures):
-            tid = futures[future]
+            source, tid = futures[future]
             try:
                 success = future.result()
                 if success:
                     processed_count += 1
             except Exception as e:
-                print(f"[ERROR] Track {tid} failed: {e}")
+                print(f"[ERROR] {source} track {tid} failed: {e}")
 
-    skipped_count = total_tracks - processed_count
+    skipped_count = total - processed_count
     duration = round(time.time() - start_time, 2)
-    average = round(duration / total_tracks, 2) if total_tracks else 0
+    average = round(duration / total, 2) if total else 0
 
     return {
         "message": "Processing complete",
@@ -94,13 +117,14 @@ async def load_tracks(req: LoadRequest, max_workers: int = 5):
     }
 
 
-@router.get("/dashboard")
-async def dashboard():
-    return {"data": get_dashboard()}
+@router.get("/dashboard")  # type: ignore[untyped-decorator]
+async def dashboard() -> dict[str, Any]:
+    data = get_dashboard()
+    return {"data": data}
 
 
-@router.post("/dashboard")
-async def dashboard_post(req: DashboardRequest):
+@router.post("/dashboard")  # type: ignore[untyped-decorator]
+async def dashboard_post(req: DashboardRequest) -> dict[str, Any]:
     if not req.spotify_id:
         raise HTTPException(status_code=400, detail="No Spotify ID provided")
 
@@ -120,8 +144,8 @@ async def dashboard_post(req: DashboardRequest):
     }
 
 
-@router.post("/match")
-async def match(file: UploadFile = File(...)):
+@router.post("/match")  # type: ignore[untyped-decorator]
+async def match(file: UploadFile = File(...)) -> dict[str, Any]:
     if not file.filename.lower().endswith(".mp3"):
         raise HTTPException(status_code=400, detail="Only MP3 files are supported")
     audio_bytes = await file.read()
@@ -139,10 +163,10 @@ async def match(file: UploadFile = File(...)):
     return {"status": "success", "result": result}
 
 
-@router.post("/feedback")
-async def feedback(req: FeedbackRequest, request: Request):
+@router.post("/feedback")  # type: ignore[untyped-decorator]
+async def feedback(req: FeedbackRequest, request: Request) -> dict[str, Any]:
     # get user IP for rate limiting
-    user_ip = request.client.host if request.client else "unknown"
+    user_ip: str = request.client.host if request.client else "unknown"
 
     # rate limit: max 10 feedback requests per minute
     if not check_rate_limit(user_ip, "feedback", max_requests=10, window_seconds=60):

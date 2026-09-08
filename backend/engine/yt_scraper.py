@@ -15,9 +15,9 @@ ydl_opts_template = {
 }
 
 
-def yt_downloader(query: str, filename: str):
-    """downloads audio from YouTube\n
-    **PARAMS:** query (search query), filename (downloaded file)\n
+def yt_downloader(query: str, filename: str) -> tuple[str, str]:
+    """downloads audio from YouTube
+    **PARAMS:** query (search query), filename (downloaded file)
     **RETURN:** audio path, youtube id (for DB storage)"""
     opts = ydl_opts_template.copy()
     opts["outtmpl"] = os.path.join(output_dir, f"{filename}.%(ext)s")
@@ -34,11 +34,11 @@ def yt_downloader(query: str, filename: str):
         else:
             raise ValueError(f"No YouTube results found for query: '{query}'")
 
-        youtube_id = info.get("id")
+        youtube_id: str = info.get("id")
         if not youtube_id:
             raise ValueError(f"Failed to retrieve YouTube ID for query: '{query}'")
 
-        audio_path = os.path.join(output_dir, f"{filename}.mp3")
+        audio_path: str = os.path.join(output_dir, f"{filename}.mp3")
         return audio_path, youtube_id
 
     except Exception as e:

@@ -1,21 +1,32 @@
 import os, base64, time, requests
 from dotenv import load_dotenv
+from yt_dlp import YoutubeDL
+from typing import TypedDict, Optional
 
 load_dotenv()
-CLIENT_ID = os.getenv("SPOTIFY_CLIENT_ID")
-CLIENT_SECRET = os.getenv("SPOTIFY_CLIENT_SECRET")
+CLIENT_ID: Optional[str] = os.getenv("SPOTIFY_CLIENT_ID")
+CLIENT_SECRET: Optional[str] = os.getenv("SPOTIFY_CLIENT_SECRET")
 
 # simple token cache so we dont request a new one every call
-_cached_token = None
-_token_expiry = 0
+_cached_token: Optional[str] = None
+_token_expiry: float = 0
 
 
-def _get_token():
+class TrackMetadata(TypedDict):
+    title: str
+    artists: str
+    album_name: Optional[str]
+    cover: Optional[str]
+    release_date: Optional[str]
+    duration_ms: Optional[int]
+
+
+def _get_token() -> str:
     """get a spotify access token, reuses cached one if still valid"""
     global _cached_token, _token_expiry
 
     if _cached_token and time.time() < _token_expiry:
-        return _cached_token
+        return _cached_token or ""
 
     token_resp = requests.post(
         "https://accounts.spotify.com/api/token",
@@ -29,7 +40,7 @@ def _get_token():
     if token_resp.status_code != 200:
         raise Exception("Failed to get Spotify access token")
 
-    token = token_resp.json().get("access_token")
+    token: str = token_resp.json().get("access_token")
     if not token:
         raise Exception("Spotify access token missing")
 
@@ -40,10 +51,53 @@ def _get_token():
     return token
 
 
-def spotify_parser(track_id: str):
-    """returns metadata for a spotify song\n
-    **PARAMS:** track_id (spotify songID)\n
+def _yt_dlp_metadata(search_query: str) -> TrackMetadata:
+    """fetch metadata from YouTube using yt-dlp when Spotify keys are unavailable"""
+    ydl_opts = {
+        "format": "bestaudio/best",
+        "noplaylist": True,
+        "quiet": True,
+        "extract_flat": False,
+    }
+
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{search_query}", download=False)
+        entry = info["entries"][0] if "entries" in info else info
+
+        title = entry.get("title", "")
+        artists = entry.get("uploader") or entry.get("channel") or ""
+        cover_url: Optional[str] = None
+        thumbnails = entry.get("thumbnails", [])
+        if thumbnails:
+            cover_url = thumbnails[-1].get("url")
+
+        return TrackMetadata(
+            title=title,
+            artists=artists,
+            album_name=None,
+            cover=cover_url,
+            release_date=None,
+            duration_ms=None,
+        )
+    except Exception:
+        # fallback minimal metadata
+        return TrackMetadata(title=search_query, artists="", album_name=None, cover=None, release_date=None, duration_ms=None)
+
+
+def spotify_parser(track_id: str) -> TrackMetadata:
+    """returns metadata for a song
+    **PARAMS:** track_id (spotify songID) OR search query (if Spotify keys missing)
     **RETURN:** {title, artists, album_name, cover (link), release_date, duration_ms}"""
+    # if Spotify keys not set, fall back to yt-dlp
+    if not CLIENT_ID or not CLIENT_SECRET:
+        # if it looks like a Spotify ID (22 chars alphanumeric), try extracting info
+        if len(track_id) == 22 and track_id.isalnum():
+            search_query = f"track:{track_id}"
+        else:
+            search_query = track_id
+        return _yt_dlp_metadata(search_query)
+
     token = _get_token()
 
     resp = requests.get(
@@ -59,27 +113,31 @@ def spotify_parser(track_id: str):
 
     album = data.get("album", {})
     images = album.get("images", [])
-    cover_url = images[0]["url"] if images else None
+    cover_url: Optional[str] = images[0]["url"] if images else None
 
-    return {
-        "title": data.get("name"),
-        "artists": ", ".join(a.get("name", "") for a in data.get("artists", [])),
-        "album_name": album.get("name"),
-        "cover": cover_url,
-        "release_date": album.get("release_date"),
-        "duration_ms": data.get("duration_ms"),
-    }
+    return TrackMetadata(
+        title=data.get("name"),
+        artists=", ".join(a.get("name", "") for a in data.get("artists", [])),
+        album_name=album.get("name"),
+        cover=cover_url,
+        release_date=album.get("release_date"),
+        duration_ms=data.get("duration_ms"),
+    )
 
 
-def extract_spotify_ids(item_id: str, item_type: str):
-    """extracts all track IDs from a Spotify album/playlist\n
-    **PARAMS:** item_id (spotify album/playlist ID), item_type ("album" / "playlist")\n
+def extract_spotify_ids(item_id: str, item_type: str) -> list[str]:
+    """extracts all track IDs from a Spotify album/playlist
+    **PARAMS:** item_id (spotify album/playlist ID), item_type ("album" / "playlist")
     **RETURN:**list of track IDs
     """
+    if not CLIENT_ID or not CLIENT_SECRET:
+        # if no Spotify keys, treat item_id as a single track ID
+        return [item_id]
+
     token = _get_token()
     headers = {"Authorization": f"Bearer {token}"}
 
-    track_ids = []
+    track_ids: list[str] = []
 
     if item_type == "album":
         resp = requests.get(

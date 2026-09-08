@@ -32,48 +32,53 @@ export default function ProcessTracks() {
     setEntries(updated);
   };
 
-  const parse_inputs = (entriesArray) => {
-    const result = { track_id: [], album_id: [], playlist_id: [] };
+  const isValidLink = (urlString) => {
+    if (!urlString.trim()) return false;
+    const trimmed = urlString.trim();
+    if (trimmed.includes("youtube.com") || trimmed.includes("youtu.be"))
+      return true;
+    if (trimmed.includes("spotify.com")) return true;
+    return false;
+  };
 
-    const extractIdAndType = (value) => {
-      const trimmed = value.split("?")[0].trim();
+  const canProcess =
+    entries.length > 0 &&
+    entries.some((e) => e.trim()) &&
+    entries.every((e) => e.trim() === "" || isValidLink(e));
+
+  const parse_inputs = (entriesArray) => {
+    const result = {
+      track_id: [],
+      album_id: [],
+      playlist_id: [],
+      youtube_url: "",
+    };
+
+    entriesArray.forEach((entry) => {
+      if (!entry.trim()) return;
+      const trimmed = entry.trim();
+
+      if (trimmed.includes("youtube.com") || trimmed.includes("youtu.be")) {
+        result.youtube_url = trimmed;
+        return;
+      }
+
       try {
         const url = new URL(trimmed);
         const parts = url.pathname.split("/").filter(Boolean);
         const type = parts[0];
         const id = parts[1];
-        if (!id) return { type: "track", id: trimmed };
-        return { type, id };
+        if (!id) result.track_id.push(trimmed);
+        else if (type === "track") result.track_id.push(id);
+        else if (type === "album") result.album_id.push(id);
+        else if (type === "playlist") result.playlist_id.push(id);
       } catch {
-        return { type: "track", id: trimmed };
+        result.track_id.push(trimmed);
       }
-    };
-
-    entriesArray.forEach((entry) => {
-      if (!entry.trim()) return;
-      const { type, id } = extractIdAndType(entry);
-      if (type === "track") result.track_id.push(id);
-      else if (type === "album") result.album_id.push(id);
-      else if (type === "playlist") result.playlist_id.push(id);
     });
 
     return result;
   };
-
-  const isValidSpotifyLink = (urlString) => {
-    if (!urlString.trim()) return false;
-    try {
-      const url = new URL(urlString.trim());
-      return url.hostname.includes("spotify.com");
-    } catch {
-      return false;
-    }
-  };
-
-  const canProcess =
-    entries.length > 0 &&
-    entries.some((e) => e.trim()) && // at least one non-empty
-    entries.every((e) => e.trim() === "" || isValidSpotifyLink(e)); // all valid
 
   const handleProcess = async () => {
     setOverlayVisible(false); // close overlay immediately

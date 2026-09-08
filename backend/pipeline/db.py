@@ -1,11 +1,38 @@
 import sqlite3
 import time
-from engine.spotify_parser import spotify_parser
+import os
+from typing import Any, Optional, TypedDict, cast
+from engine.spotify_parser import spotify_parser, TrackMetadata
 
-DB_PATH = "sonique.db"
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sonique.db")
 
 
-def create_db(conn: sqlite3.Connection):
+class SongMetadata(TypedDict):
+    spotify_ID: str
+    youtube_ID: str
+    title: str
+    artists: str
+    cover: str
+    album_name: str
+    release_date: str
+    duration_ms: int
+
+
+class SongRow(TypedDict):
+    spotify_ID: str
+    youtube_ID: str
+    hash_time: float
+    hash_value: str
+
+
+class FingerprintDict(TypedDict):
+    spotify_ID: str
+    youtube_ID: str
+    hash_time: float
+    hash_value: str
+
+
+def create_db(conn: sqlite3.Connection) -> None:
     """create db tables if they dont exist"""
     try:
         cursor = conn.cursor()
@@ -72,43 +99,45 @@ def create_db(conn: sqlite3.Connection):
         print(f"[DB ERROR] create_db failed: {e}")
 
 
-def get_connection() -> sqlite3.Connection | None:
+def get_connection() -> sqlite3.Connection:
     try:
         conn = sqlite3.connect(DB_PATH)
         create_db(conn)
         return conn
     except sqlite3.Error as e:
         print(f"[DB ERROR] Connection failed: {e}")
-        return None
+        raise
 
 
-def song_exists(track_id: str) -> int:
-    """checks if spotifyID already in DB\n
-    **PARAMS:** track_id\n
+def song_exists(track_id: str) -> bool:
+    """checks if spotifyID already in DB
+
+    **PARAMS:** track_id
     **RETURN:** boolean"""
     query = "SELECT EXISTS(SELECT 1 FROM Songs WHERE spotify_ID = ?) AS spotify_exists"
 
     conn = get_connection()
     if not conn:
         print("[DB ERROR] Could not connect to DB for song_exists")
-        return 0
+        return False
 
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(query, (track_id,))
         result = cursor.fetchone()
-        return result["spotify_exists"] if result else 0
+        return result["spotify_exists"] == 1 if result else False
     except sqlite3.Error as e:
         print(f"[DB ERROR] song_exists failed: {e}")
-        return 0
+        return False
     finally:
         cursor.close()
         conn.close()
 
 
-def save_fingerprints_batch(fingerprints: list[dict]):
-    """save fingerprints to 'Songs' table\n
+def save_fingerprints_batch(fingerprints: list[FingerprintDict]) -> int:
+    """save fingerprints to 'Songs' table
+
     **PARAMS:** fingerprints (list of dicts/tuples containing: spotify_ID, youtube_ID, hash_time, hash_value)
     """
     if not fingerprints:
@@ -143,7 +172,7 @@ def save_fingerprints_batch(fingerprints: list[dict]):
         conn.close()
 
 
-def save_song_metadata(spotify_id, youtube_id, metadata):
+def save_song_metadata(spotify_id: str, youtube_id: str, metadata: TrackMetadata) -> None:
     """save song metadata to SongMetadata table"""
     conn = get_connection()
     if not conn:
@@ -178,7 +207,7 @@ def save_song_metadata(spotify_id, youtube_id, metadata):
         conn.close()
 
 
-def get_song_metadata(spotify_id: str):
+def get_song_metadata(spotify_id: str) -> Optional[SongMetadata]:
     """get song metadata from SongMetadata table (cached)"""
     conn = get_connection()
     if not conn:
@@ -192,7 +221,9 @@ def get_song_metadata(spotify_id: str):
             (spotify_id,),
         )
         row = cursor.fetchone()
-        return dict(row) if row else None
+        if not row:
+            return None
+        return dict(row)  # type: ignore[return-value]
     except sqlite3.Error as e:
         print(f"[DB ERROR] get_song_metadata failed: {e}")
         return None
@@ -201,7 +232,7 @@ def get_song_metadata(spotify_id: str):
         conn.close()
 
 
-def get_dashboard() -> list[dict]:
+def get_dashboard() -> list[SongRow]:
     """returns list of unique songs in DB with metadata"""
     conn = get_connection()
     if not conn:
@@ -220,8 +251,8 @@ def get_dashboard() -> list[dict]:
             ORDER BY entry_count DESC
         """
         )
-        results = [dict(row) for row in cursor.fetchall()]
-        return results
+        results: list[dict[str, Any]] = [dict(row) for row in cursor.fetchall()]
+        return results  # type: ignore[return-value]
     except sqlite3.Error as e:
         print(f"[DB ERROR] Failed to fetch dashboard data: {e}")
         return []
@@ -230,9 +261,10 @@ def get_dashboard() -> list[dict]:
         conn.close()
 
 
-def get_song(spotify_id: str):
-    """fetch a single song's details\n
-    **PARAMS:** spotify_id (str)\n
+def get_song(spotify_id: str) -> Optional[SongMetadata]:
+    """fetch a single song's details
+
+    **PARAMS:** spotify_id (str)
     **RETURN:** dict with song details or None
     """
     # first try to get from cached metadata
@@ -259,7 +291,7 @@ def get_song(spotify_id: str):
         try:
             meta = spotify_parser(row[0])
             save_song_metadata(row[0], row[1], meta)
-            return {
+            return cast(SongMetadata, {
                 "spotify_ID": row[0],
                 "youtube_ID": row[1],
                 "title": meta.get("title", ""),
@@ -268,10 +300,10 @@ def get_song(spotify_id: str):
                 "album_name": meta.get("album_name", ""),
                 "release_date": meta.get("release_date", ""),
                 "duration_ms": meta.get("duration_ms", 0),
-            }
+            })
         except Exception as e:
             print(f"[ERROR] spotify_parser failed for {row[0]}: {e}")
-            return {
+            return cast(SongMetadata, {
                 "spotify_ID": row[0],
                 "youtube_ID": row[1],
                 "title": "",
@@ -280,7 +312,7 @@ def get_song(spotify_id: str):
                 "album_name": "",
                 "release_date": "",
                 "duration_ms": 0,
-            }
+            })
 
     except sqlite3.Error as e:
         print(f"[DB ERROR] get_song failed: {e}")
@@ -290,7 +322,7 @@ def get_song(spotify_id: str):
         conn.close()
 
 
-def get_all_fingerprints() -> list[dict]:
+def get_all_fingerprints() -> list[FingerprintDict]:
     """returns list of all fingerprints in DB"""
     query = "SELECT spotify_ID, hash_value, hash_time FROM Songs"
 
@@ -302,8 +334,8 @@ def get_all_fingerprints() -> list[dict]:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute(query)
-        results = [dict(row) for row in cursor.fetchall()]
-        return results
+        results: list[dict[str, Any]] = [dict(row) for row in cursor.fetchall()]
+        return results  # type: ignore[return-value]
     except sqlite3.Error as e:
         print(f"[DB ERROR] Failed to fetch fingerprints: {e}")
         return []
@@ -312,7 +344,7 @@ def get_all_fingerprints() -> list[dict]:
         conn.close()
 
 
-def save_feedback(spotify_id, user_ip, is_correct, audio_path=None):
+def save_feedback(spotify_id: str, user_ip: str, is_correct: bool, audio_path: Optional[str] = None) -> None:
     """save user feedback (correct/incorrect match)"""
     conn = get_connection()
     if not conn:
@@ -337,8 +369,11 @@ def save_feedback(spotify_id, user_ip, is_correct, audio_path=None):
         conn.close()
 
 
-def check_rate_limit(user_ip, endpoint, max_requests=10, window_seconds=60):
+def check_rate_limit(
+    user_ip: str, endpoint: str, max_requests: int = 10, window_seconds: int = 60
+) -> bool:
     """check if user has exceeded rate limit
+
     **RETURN:** True if allowed, False if rate limited"""
     conn = get_connection()
     if not conn:

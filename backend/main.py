@@ -1,10 +1,4 @@
-# from fastapi import FastAPI
-# from routes import router
-# app = FastAPI(title="Sonique Backend")
-# app.include_router(router)
-# @app.get("/")
-# async def root():
-#     return {"message": "Sonique online"}
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,12 +7,13 @@ from routes import router
 app = FastAPI(title="Sonique Backend")
 
 # ✅ CORS setup
-origins = [
-    "http://localhost:19006",  # Expo web dev server
+origins: list[str] = [
+    "http://localhost:19006",
     "http://127.0.0.1:19006",
-    "http://localhost:8081",  # Expo web (your current frontend)
-    "http://127.0.0.1:8081",  # optional
-    # "*"  # You can use this temporarily to allow all origins
+    "http://localhost:8081",
+    "http://127.0.0.1:8081",
+    "http://localhost:8082",
+    "http://127.0.0.1:8082",
 ]
 
 app.add_middleware(
@@ -33,6 +28,6 @@ app.add_middleware(
 app.include_router(router)
 
 
-@app.get("/")
-async def root():
+@app.get("/")  # type: ignore[untyped-decorator]
+async def root() -> dict[str, Any]:
     return {"message": "Sonique online"}
