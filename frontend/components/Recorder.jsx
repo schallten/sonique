@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Animated, Pressable, View, Text, Alert } from "react-native";
+import { Animated, Pressable, View, Text, Alert, ActivityIndicator } from "react-native";
 import { FontAwesome } from "@expo/vector-icons";
 import { styles } from "../styles/components.styles";
 import Overlay from "./Overlay";
@@ -21,6 +21,7 @@ export default function Recorder() {
   const [fileUri, setFileUri] = useState(null);
   const [playing, setPlaying] = useState(false);
   const [detectedData, setDetectedData] = useState(null);
+  const [detecting, setDetecting] = useState(false);
 
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const uploadAnim = useRef(new Animated.Value(1)).current;
@@ -143,7 +144,8 @@ export default function Recorder() {
   };
 
   const handleDetectSong = async () => {
-    if (!fileUri) return;
+    if (!fileUri || detecting) return;
+    setDetecting(true);
     let blob;
     try {
       const blobResponse = await fetch(fileUri);
@@ -151,12 +153,13 @@ export default function Recorder() {
     } catch (error) {
       console.error("Failed to fetch Blob data:", error);
       Alert.alert("Error", "Could not read the audio file data.");
+      setDetecting(false);
       return;
     }
 
     const formData = new FormData();
 
-    let fileName = "recorded_audio.mp3"; // idk if i should use a generic name or what
+    let fileName = "recorded_audio.mp3";
 
     formData.append("file", blob, fileName);
 
@@ -172,6 +175,7 @@ export default function Recorder() {
         setOverlayVisible(false);
         setPlaying(false);
         setFileUri(null);
+        setDetecting(false);
         if (result.status === "success" && result.result?.length > 0) {
           const best = result.result[0];
           const matchData = {
@@ -186,6 +190,7 @@ export default function Recorder() {
       } else {
         const errorData = await response.json();
         console.error("Detection failed:", response.status, errorData);
+        setDetecting(false);
         Alert.alert(
           "Error",
           `Detection failed. Details: ${JSON.stringify(errorData.detail)}`
@@ -193,6 +198,7 @@ export default function Recorder() {
       }
     } catch (error) {
       console.error("API call error:", error);
+      setDetecting(false);
       Alert.alert("Error", "Network error or failed request.");
     }
   };
@@ -254,12 +260,23 @@ export default function Recorder() {
                 style={[
                   styles.recorderOverlayButton,
                   { flex: 1, marginRight: 8 },
+                  detecting && { opacity: 0.7 },
                 ]}
                 onPress={handleDetectSong}
+                disabled={detecting}
               >
-                <Text style={styles.recorderOverlayButtonText}>
-                  Detect Song
-                </Text>
+                {detecting ? (
+                  <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "center" }}>
+                    <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />
+                    <Text style={styles.recorderOverlayButtonText}>
+                      Detecting...
+                    </Text>
+                  </View>
+                ) : (
+                  <Text style={styles.recorderOverlayButtonText}>
+                    Detect Song
+                  </Text>
+                )}
               </Pressable>
               <Pressable
                 style={[

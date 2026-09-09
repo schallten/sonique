@@ -4,7 +4,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend/sonique.db:/app/backend/sonique.db
+      - ./backend/database:/app/backend/database
       - ./backend/downloads:/app/backend/downloads
     env_file:
       - .env

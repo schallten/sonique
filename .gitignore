@@ -8,7 +8,7 @@ dist
 .expo
 !.vscode/extensions.json
 web-build/
-*.db
+database/
 expo-env.d.ts
 .kotlin/
 *.orig.*
