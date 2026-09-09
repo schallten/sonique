@@ -208,21 +208,38 @@ def process_spotify_track(track_id: str) -> bool:
 
 if __name__ == "__main__":
     import sys
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     if len(sys.argv) < 2:
         print("Usage:")
-        print("  python -m pipeline.load <youtube_url>      # YouTube playlist or video URL")
-        print("  python -m pipeline.load <spotify_id>       # Spotify track ID")
+        print("  python -m pipeline.load <youtube_url> [--workers N]")
+        print("  python -m pipeline.load <spotify_id> [--workers N]")
         sys.exit(1)
 
     target = sys.argv[1]
+    workers = 3
+    if "--workers" in sys.argv:
+        idx = sys.argv.index("--workers")
+        if idx + 1 < len(sys.argv):
+            workers = max(1, min(int(sys.argv[idx + 1]), 8))
 
     if "youtube.com" in target or "youtu.be" in target:
-        # YouTube URL - extract track IDs and process each
         track_ids = extract_yt_playlist_ids(target)
-        print(f"[INFO] Found {len(track_ids)} tracks in playlist")
-        for tid in track_ids:
-            process_youtube_track(tid)
+        print(f"[INFO] Found {len(track_ids)} tracks, processing with {workers} workers")
+        processed = 0
+        skipped = 0
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(process_youtube_track, tid): tid for tid in track_ids}
+            for future in as_completed(futures):
+                tid = futures[future]
+                try:
+                    if future.result():
+                        processed += 1
+                    else:
+                        skipped += 1
+                except Exception as e:
+                    print(f"[ERROR] {tid} failed: {e}")
+                    skipped += 1
+        print(f"\n[DONE] Processed: {processed}, Skipped: {skipped}")
     else:
-        # assume Spotify track ID
         process_spotify_track(target)

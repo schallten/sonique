@@ -3,6 +3,7 @@ from typing import Any
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from routes import router
+from pipeline.db import ensure_databases
 
 app = FastAPI(title="Sonique Backend")
 
@@ -23,6 +24,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    ensure_databases()
+
 
 # Include your routes
 app.include_router(router)

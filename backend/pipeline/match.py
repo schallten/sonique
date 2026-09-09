@@ -5,7 +5,7 @@ from engine.preprocessor import preprocessor
 from engine.spectrogram import audio_to_spectrogram
 from engine.fingerprinting import generate_hashes
 from engine.peak_maker import extract_peaks
-from pipeline.db import get_all_fingerprints, get_song
+from pipeline.db import get_db_files, get_fingerprints_from_db, get_song
 from typing import TypedDict, Optional
 
 TEMP_DIR = "temp"
@@ -34,7 +34,6 @@ def process_audio_sample(audio_bytes: bytes) -> list[dict[str, object]]:
     result = match(file_path)
     print(f"[BACKEND LOG] Match result: {result}")
 
-    # clean up the temporary file
     if os.path.exists(file_path):
         os.remove(file_path)
 
@@ -61,7 +60,8 @@ def get_song_details(spotify_id: str) -> Optional[SongDetails]:
 
 def match(file_path: str) -> list[dict[str, object]]:
     """
-    matches an audio file against the fingerprint database
+    matches an audio file against the fingerprint database.
+    loads each DB one by one to avoid memory spikes.
 
     Args:
         file_path (str): path to the audio file
@@ -73,14 +73,6 @@ def match(file_path: str) -> list[dict[str, object]]:
         print(f"[ERROR] File not found: {file_path}")
         return []
 
-    db_fingerprints = get_all_fingerprints()
-    if not db_fingerprints:
-        print("[ERROR] Database is empty or could not be read.")
-        return []
-
-    print(f"[BACKEND LOG] Fetched {len(db_fingerprints)} fingerprints from the database.")
-
-    # generate fingerprints for the input audio file
     processed_path: Optional[str] = None
     try:
         processed_path = preprocessor(file_path)
@@ -101,35 +93,54 @@ def match(file_path: str) -> list[dict[str, object]]:
     print(f"[BACKEND LOG] Generated {len(input_fingerprints)} fingerprints from the input audio.")
 
     input_fingerprints_with_time: dict[str, float] = {h: t for h, t in input_fingerprints}
-
-    # group database fingerprints by spotify_ID
-    db_fingerprints_by_song: dict[str, list[tuple[str, float]]] = {}
-    for db_fp in db_fingerprints:
-        spotify_id = db_fp["spotify_ID"]
-        if spotify_id not in db_fingerprints_by_song:
-            db_fingerprints_by_song[spotify_id] = []
-        db_fingerprints_by_song[spotify_id].append((db_fp["hash_value"], db_fp["hash_time"]))
-
-    # find potential matches and calculate confidence
     results: list[dict[str, object]] = []
-    for spotify_id, db_fps in db_fingerprints_by_song.items():
-        time_offsets: list[float] = []
-        for db_hash, db_time in db_fps:
-            if db_hash in input_fingerprints_with_time:
-                input_time = input_fingerprints_with_time[db_hash]
-                time_offsets.append(db_time - input_time)
+    seen_songs: dict[str, int] = {}
 
-        if time_offsets:
-            _, num_matches = Counter(time_offsets).most_common(1)[0]
-            confidence: float = (num_matches / len(input_fingerprints)) * 100 if len(input_fingerprints) > 0 else 0
-            print(f"[BACKEND LOG] Song {spotify_id}: Found {num_matches} matching hashes. Confidence: {confidence}%")
+    db_files = get_db_files()
+    print(f"[BACKEND LOG] Searching across {len(db_files)} database(s)...")
 
-            song_details = get_song_details(spotify_id)
-            if song_details:
-                results.append({
-                    "song_details": song_details,
-                    "confidence": round(confidence, 2),
-                })
+    for db_path in db_files:
+        db_name = os.path.basename(db_path)
+        db_fingerprints = get_fingerprints_from_db(db_path)
+        if not db_fingerprints:
+            print(f"[BACKEND LOG] {db_name}: empty, skipping")
+            continue
+
+        print(f"[BACKEND LOG] {db_name}: {len(db_fingerprints)} fingerprints")
+
+        db_fingerprints_by_song: dict[str, list[tuple[str, float]]] = {}
+        for db_fp in db_fingerprints:
+            spotify_id = db_fp["spotify_ID"]
+            if spotify_id not in db_fingerprints_by_song:
+                db_fingerprints_by_song[spotify_id] = []
+            db_fingerprints_by_song[spotify_id].append((db_fp["hash_value"], db_fp["hash_time"]))
+
+        for spotify_id, db_fps in db_fingerprints_by_song.items():
+            time_offsets: list[float] = []
+            for db_hash, db_time in db_fps:
+                if db_hash in input_fingerprints_with_time:
+                    input_time = input_fingerprints_with_time[db_hash]
+                    time_offsets.append(db_time - input_time)
+
+            if time_offsets:
+                _, num_matches = Counter(time_offsets).most_common(1)[0]
+                confidence: float = (num_matches / len(input_fingerprints)) * 100 if len(input_fingerprints) > 0 else 0
+                print(f"[BACKEND LOG] Song {spotify_id}: {num_matches} matches, confidence {confidence}%")
+
+                if spotify_id in seen_songs:
+                    idx = seen_songs[spotify_id]
+                    if confidence > results[idx]["confidence"]:
+                        results[idx]["confidence"] = round(confidence, 2)
+                else:
+                    song_details = get_song_details(spotify_id)
+                    if song_details:
+                        seen_songs[spotify_id] = len(results)
+                        results.append({
+                            "song_details": song_details,
+                            "confidence": round(confidence, 2),
+                        })
+
+        del db_fingerprints
 
     results.sort(key=lambda x: x["confidence"], reverse=True)  # type: ignore
 
